@@ -10,7 +10,7 @@
 
 /* the eight DES S-boxes */
 
-uint32_t SB1[64] = {
+static uint32_t SB1[64] = {
 	0x01010400, 0x00000000, 0x00010000, 0x01010404,
 	0x01010004, 0x00010404, 0x00000004, 0x00010000,
 	0x00000400, 0x01010400, 0x01010404, 0x00000400,
@@ -338,8 +338,13 @@ static int
 lrandomkey(lua_State *L) {
 	char tmp[8];
 	int i;
+	char x = 0;
 	for (i=0;i<8;i++) {
 		tmp[i] = random() & 0xff;
+		x ^= tmp[i];
+	}
+	if (x==0) {
+		tmp[0] |= 1;	// avoid 0
 	}
 	lua_pushlstring(L, tmp, 8);
 	return 1;
@@ -718,8 +723,11 @@ static int
 ldhsecret(lua_State *L) {
 	uint32_t x[2], y[2];
 	read64(L, x, y);
-	uint64_t r = powmodp((uint64_t)x[0] | (uint64_t)x[1]<<32,
-		(uint64_t)y[0] | (uint64_t)y[1]<<32);
+	uint64_t xx = (uint64_t)x[0] | (uint64_t)x[1]<<32;
+	uint64_t yy = (uint64_t)y[0] | (uint64_t)y[1]<<32;
+	if (xx == 0 || yy == 0)
+		return luaL_error(L, "Can't be 0");
+	uint64_t r = powmodp(xx, yy);
 
 	push64(L, r);
 
@@ -739,7 +747,11 @@ ldhexchange(lua_State *L) {
 	xx[0] = x[0] | x[1]<<8 | x[2]<<16 | x[3]<<24;
 	xx[1] = x[4] | x[5]<<8 | x[6]<<16 | x[7]<<24;
 
-	uint64_t r = powmodp(5,	(uint64_t)xx[0] | (uint64_t)xx[1]<<32);
+	uint64_t x64 = (uint64_t)xx[0] | (uint64_t)xx[1]<<32;
+	if (x64 == 0)
+		return luaL_error(L, "Can't be 0");
+
+	uint64_t r = powmodp(5,	x64);
 	push64(L, r);
 	return 1;
 }
