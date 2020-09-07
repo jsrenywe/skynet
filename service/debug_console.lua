@@ -148,6 +148,7 @@ function COMMAND.help()
 		clearcache = "clear lua code cache",
 		service = "List unique service",
 		task = "task address : show service task detail",
+		uniqtask = "task address : show service unique task detail",
 		inject = "inject address luascript.lua",
 		logon = "logon address",
 		logoff = "logoff address",
@@ -155,10 +156,13 @@ function COMMAND.help()
 		debug = "debug address : debug a lua service",
 		signal = "signal address sig",
 		cmem = "Show C memory info",
-		shrtbl = "Show shared short string table info",
+		jmem = "Show jemalloc mem stats",
 		ping = "ping address",
 		call = "call address ...",
 		trace = "trace address [proto] [on|off]",
+		netstat = "netstat : show netstat",
+		profactive = "profactive [on|off] : active/deactive jemalloc heap profilling",
+		dumpheap = "dumpheap : dump heap profilling",
 	}
 end
 
@@ -207,7 +211,10 @@ function COMMAND.service()
 end
 
 local function adjust_address(address)
-	if address:sub(1,1) ~= ":" then
+	local prefix = address:sub(1,1)
+	if prefix == '.' then
+		return assert(skynet.localname(address), "Not a valid name")
+	elseif prefix ~= ':' then
 		address = assert(tonumber("0x" .. address), "Need an address") | (skynet.harbor(skynet.self()) << 24)
 	end
 	return address
@@ -237,7 +244,7 @@ function COMMAND.exit(address)
 	skynet.send(adjust_address(address), "debug", "EXIT")
 end
 
-function COMMAND.inject(address, filename)
+function COMMAND.inject(address, filename, ...)
 	address = adjust_address(address)
 	local f = io.open(filename, "rb")
 	if not f then
@@ -245,7 +252,7 @@ function COMMAND.inject(address, filename)
 	end
 	local source = f:read "*a"
 	f:close()
-	local ok, output = skynet.call(address, "debug", "RUN", source, filename)
+	local ok, output = skynet.call(address, "debug", "RUN", source, filename, ...)
 	if ok == false then
 		error(output)
 	end
@@ -255,6 +262,11 @@ end
 function COMMAND.task(address)
 	address = adjust_address(address)
 	return skynet.call(address,"debug","TASK")
+end
+
+function COMMAND.uniqtask(address)
+	address = adjust_address(address)
+	return skynet.call(address,"debug","UNIQTASK")
 end
 
 function COMMAND.info(address, ...)
@@ -331,9 +343,13 @@ function COMMAND.cmem()
 	return tmp
 end
 
-function COMMAND.shrtbl()
-	local n, total, longest, space = memory.ssinfo()
-	return { n = n, total = total, longest = longest, space = space }
+function COMMAND.jmem()
+	local info = memory.jestat()
+	local tmp = {}
+	for k,v in pairs(info) do
+		tmp[k] = string.format("%11d  %8.2f Mb", v, v/1048576)
+	end
+	return tmp
 end
 
 function COMMAND.ping(address)
@@ -370,4 +386,66 @@ function COMMANDX.call(cmd)
 	end
 	local rets = table.pack(skynet.call(address, "lua", table.unpack(args, 2, args.n)))
 	return rets
+end
+
+local function bytes(size)
+	if size == nil or size == 0 then
+		return
+	end
+	if size < 1024 then
+		return size
+	end
+	if size < 1024 * 1024 then
+		return tostring(size/1024) .. "K"
+	end
+	return tostring(size/(1024*1024)) .. "M"
+end
+
+local function convert_stat(info)
+	local now = skynet.now()
+	local function time(t)
+		if t == nil then
+			return
+		end
+		t = now - t
+		if t < 6000 then
+			return tostring(t/100) .. "s"
+		end
+		local hour = t // (100*60*60)
+		t = t - hour * 100 * 60 * 60
+		local min = t // (100*60)
+		t = t - min * 100 * 60
+		local sec = t / 100
+		return string.format("%s%d:%.2gs",hour == 0 and "" or (hour .. ":"),min,sec)
+	end
+
+	info.address = skynet.address(info.address)
+	info.read = bytes(info.read)
+	info.write = bytes(info.write)
+	info.wbuffer = bytes(info.wbuffer)
+	info.rtime = time(info.rtime)
+	info.wtime = time(info.wtime)
+end
+
+function COMMAND.netstat()
+	local stat = socket.netstat()
+	for _, info in ipairs(stat) do
+		convert_stat(info)
+	end
+	return stat
+end
+
+function COMMAND.dumpheap()
+	memory.dumpheap()
+end
+
+function COMMAND.profactive(flag)
+	if flag ~= nil then
+		if flag == "on" or flag == "off" then
+			flag = toboolean(flag)
+		end
+		memory.profactive(flag)
+	end
+	local active = memory.profactive()
+	return "heap profilling is ".. (active and "active" or "deactive")
 end
